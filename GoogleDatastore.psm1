@@ -4,6 +4,7 @@ class DSUri
 {
     [string]$Project
     [Dictionary[string, hashtable]]$UriList
+    [string]$OAuthToken
         
     DSUri([string]$Project)
     {
@@ -13,6 +14,16 @@ class DSUri
         }
         $this.Project = $Project
         $this.PopulateUris()
+    }
+    DSUri([string]$Project, [string]$OAuthToken)
+    {
+        if ([string]::IsNullorWhiteSpace($Project))
+        {
+            throw [ArgumentException]::new("Project cannot be null or empty string")
+        }
+        $this.Project = $Project
+        $this.PopulateUris()
+        $this.OAuthToken = $OAuthToken
     }
 
     PopulateUris()
@@ -51,7 +62,11 @@ class DSUri
 
     [object] InvokeRestMethod([string]$Action, [object]$Body)
     {
-        return (Invoke-RestMethod -Authentication OAuth -Token  -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body)
+        If ([string]::IsNullOrEmpty($this.OAuthToken))
+        {
+            return (Invoke-RestMethod -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body)
+        }
+        return (Invoke-RestMethod -Authentication OAuth -Token $this.OAuthToken -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body)
     }
 }
 
