@@ -119,7 +119,8 @@ class ReadWrite
 {
     [string]$PreviousTransaction
 
-    ReadWrite(){}
+    ReadWrite()
+    {}
 
     ReadWrite([string]$prevTransaction)
     {
@@ -233,7 +234,6 @@ class KeyFactory
 
     hidden [PartitionId]CreatePartition()
     {
-
         $Partition = [PartitionId]::new()
         $Partition.projectId = $this.Project
         if ($this.Namespace)
@@ -270,7 +270,8 @@ class GqlQuery
     [Dictionary[string, object]]$namedBindings
     [List[object]]$positionalBindings
 
-    GqlQuery(){}
+    GqlQuery()
+    {}
 
     GqlQuery([string]$queryString)
     {
@@ -505,12 +506,14 @@ class CommitBody
     {
         $this.mode = [CommitMode]::TRANSACTIONAL
         $this.transaction = $transactionId
+        $this.mutations = [List[Mutation]]::new()
     }
     
     CommitBody([string]$transactionId, [mutation[]]$mutations, [CommitMode]$mode = [CommitMode]::TRANSACTIONAL)
     {
         $this.transaction = $transactionId
         $this.mode = $mode
+        $this.mutations = [List[Mutation]]::new()
         ForEach ($m in $mutations)
         {
             $this.AddMutation($m)
@@ -551,6 +554,10 @@ class LookupBody
 
     AddKey([Key]$key)
     {
+        if ($null -eq $this.keys)
+        {
+            $this.keys = [List[Key]]::new()
+        }
         $this.keys.Add($key)
     }
 }
@@ -585,14 +592,11 @@ class LatLng
         {
             "Latitude"
             {
-
                 $this.SetLatitude($l)
             }
             "Longitude"
             {
-
                 $this.SetLongitude($l)
-
             }
             Default
             {
@@ -633,6 +637,7 @@ class ArrayValue
 
     ArrayValue([Value[]]$values)
     {
+        $this.values = [List[Value]]::new()
         ForEach ($v in $values)
         {
             $this.values.Add($v)
@@ -644,8 +649,6 @@ class ArrayValue
         $this.values = $values
     }
 }
-
-
 
 ####  #   # ####      ### #     ###   ###   ###  ####   ###
 #     ##  # #   #    #    #    #   # #     #     #     #
@@ -737,6 +740,7 @@ function Invoke-GdsBeginTransaction
         [Parameter(Mandatory = $true)]
         [string]$ProjectId,
 
+
         # The Transaction option. Must be "ReadOnly" or "ReadWrite"
         [Parameter(Mandatory = $false)]
         [ValidateSet("ReadOnly", "ReadWrite")]
@@ -753,6 +757,7 @@ function Invoke-GdsBeginTransaction
         $OAuthToken
 
     )
+
 
     Begin
     {
@@ -792,9 +797,9 @@ function Invoke-GdsBeginTransaction
         return $Return
     }
 
+
     End
     {
-
     }
 
 }
@@ -847,6 +852,7 @@ Param(
     [List[Object]]$PositionalBindings,
     [string]$OAuthToken
 )
+
 Begin{
         if ($OAuthToken)
         {
@@ -856,9 +862,11 @@ Begin{
         {
             $UriList = [DSUri]::new($ProjectId);
         }
+
 }
 
-Process{
+Process
+{
     $Query = [GqlQuery]::new()
     $Query.queryString = $QueryString
     $Query.allowLiterals = $AllowLiterals
