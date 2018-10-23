@@ -1,10 +1,11 @@
-﻿using namespace System.Collections.Generic;
+using namespace System.Collections.Generic;
 
 class DSUri
 {
     [string]$Project
     [Dictionary[string, hashtable]]$UriList
     [string]$OAuthToken
+    [securestring]$SecureToken
         
     DSUri([string]$Project)
     {
@@ -24,6 +25,7 @@ class DSUri
         $this.Project = $Project
         $this.PopulateUris()
         $this.OAuthToken = $OAuthToken
+        $this.SecureToken = ConvertTo-SecureString -String $this.OAuthToken -AsPlainText -Force
     }
 
     PopulateUris()
@@ -66,7 +68,8 @@ class DSUri
         {
             return (Invoke-RestMethod -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body)
         }
-        return (Invoke-RestMethod -Authentication OAuth -Token $this.OAuthToken -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body)
+        $header = @{Authorization = "Bearer $($this.OAuthToken)"}
+        return (Invoke-RestMethod -Method $this.GetMethod($Action) -Uri $this.GetUri($Action) -ContentType "application/json" -Body $Body -Headers $header)
     }
 }
 
@@ -164,7 +167,6 @@ class PathElement
         return [PathElement]::new($kind)
     }
 }
-
 
 class Key
 {
@@ -553,6 +555,18 @@ class LookupBody
     }
 }
 
+class RollbackBody
+{
+    #The transaction identifier, returned by a call to Datastore.BeginTransaction.
+    #A base64-encoded string.
+    [string]$transaction
+
+    RollbackBody([string]$TransactionId)
+    {
+        $this.transaction = $TransactionId
+    }
+}
+
 
 enum GeoLocationAxis
 {
@@ -633,9 +647,6 @@ class ArrayValue
 
 
 
-
-
-
 ####  #   # ####      ### #     ###   ###   ###  ####   ###
 #     ##  # #   #    #    #    #   # #     #     #     #
 ###   # # # #   #    #    #    #####  ###   ###  ###    ###
@@ -645,82 +656,162 @@ class ArrayValue
 
 function New-Mutation
 {
-    throw [System.NotImplementedException]::new()
+    param(
+        [Parameter(Mandatory, ParameterSetName = "Insert")]
+        [ValidateNotNull()]
+        [Entity]
+        $Insert,
+
+        [Parameter(Mandatory, ParameterSetName = "Update")]
+        [ValidateNotNull()]
+        [Entity]
+        $Update,
+
+        [Parameter(Mandatory, ParameterSetName = "Upsert")]
+        [ValidateNotNull()]
+        [Entity]
+        $Upsert,
+
+        [Parameter(Mandatory, ParameterSetName = "Delete")]
+        [ValidateNotNull()]
+        [Key]
+        $Delete,
+
+        [Parameter(Mandatory = $false)]
+        [string]
+        $BaseVersion
+    )
+    Begin
+    {
+    }
+    Process
+    {
+        $IsDeleteMutation = $PSCmdlet.ParameterSetName -eq "Delete"
+        if ($IsDeleteMutation)
+        {
+            return [Mutation]::new($Delete, $BaseVersion)
+        }
+        $Entity = Get-Variable -Name ($PSCmdlet.ParameterSetName) -ValueOnly
+        return [Mutation]::new($Entity, $PSCmdlet.ParameterSetName, $BaseVersion)
+    }
+    End
+    {
+    }
 }
 
 function Invoke-GdsRollback
 {
     Param(
         [Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true)]
-        [string]$TransactionId
+        [string]$TransactionId,
+
+        [string]
+        $ProjectId,
+
+        [Key[]]
+        $Key,
+
+        [string]
+        $OAuthToken
     )
-    throw [System.NotImplementedException]::new()
+
+    Begin{
+        if ($OAuthToken)
+        {
+            $DsUri = [DSUri]::new($ProjectId, $OAuthToken);
+        }
+        else {
+            $DsUri = [DSUri]::new($ProjectId);
+        }
+    }
+    process{
+        $Body = New-RollbackBody -TransactionId $TransactionId
+        return $DsUri.InvokeRestMethod("Rollback", $Body)
+    }
 }
 
 function Invoke-GdsBeginTransaction
 {
-param (
-    # The project ID against which to begin the transaction
-    [Parameter(Mandatory = $true)]
-    [string]$ProjectId,
+    param (
+        # The project ID against which to begin the transaction
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectId,
 
-    # The Transaction option. Must be "ReadOnly" or "ReadWrite"
-    [Parameter(Mandatory = $false)]
-    [ValidateSet("ReadOnly", "ReadWrite")]
-    [Alias("Options")]
-    [string]$TransactionOptions = "ReadOnly",
+        # The Transaction option. Must be "ReadOnly" or "ReadWrite"
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("ReadOnly", "ReadWrite")]
+        [Alias("Options")]
+        [string]$TransactionOptions = "ReadOnly",
 
-    # For ReadWrite transactions, the transaction identifier of the transaction being retried (optional)
-    [Parameter(Mandatory = $false)]
-    [string]$PreviousTransaction
+        # For ReadWrite transactions, the transaction identifier of the transaction being retried (optional)
+        [Parameter(Mandatory = $false)]
+        [string]$PreviousTransaction,
 
+        # An OAuth2 token to be used 
+        [Parameter(Mandatory = $false)]
+        [string]
+        $OAuthToken
 
-)
+    )
 
-Begin {
-    $UriList = [DSUri]::new($ProjectId);
-}
-
-Process
-{
-    $TO = [TransactionOptions]::new()
-    Switch ($TransactionOptions)
+    Begin
     {
-        "ReadOnly"
+        if ($OAuthToken)
         {
-            $TO.ReadOnly = [ReadOnly]::new()
+            $UriList = [DSUri]::new($ProjectId, $OAuthToken);
         }
-        "ReadWrite"
-        {
-            $TO.ReadWrite = [ReadWrite]::new()
-            if ($PreviousTransaction)
-            {
-                $TO.ReadWrite.PreviousTransaction = $PreviousTransaction
-            }
-        }
-        Default
-        {
-            Throw [System.ArgumentException]::new("Unexpected TransactionOptions value", "TransactionOptions")
+        else {
+            $UriList = [DSUri]::new($ProjectId);
         }
     }
 
-    $Return = $UriList.InvokeRestMethod("BeginTransaction", $TO)
-    return $Return
-}
+    Process
+    {
+        $TO = [TransactionOptions]::new()
+        Switch ($TransactionOptions)
+        {
+            "ReadOnly"
+            {
+                $TO.ReadOnly = [ReadOnly]::new()
+            }
+            "ReadWrite"
+            {
+                $TO.ReadWrite = [ReadWrite]::new()
+                if ($PreviousTransaction)
+                {
+                    $TO.ReadWrite.PreviousTransaction = $PreviousTransaction
+                }
+            }
+            Default
+            {
+                Throw [System.ArgumentException]::new("Unexpected TransactionOptions value", "TransactionOptions")
+            }
+        }
 
-End {
+        $Return = $UriList.InvokeRestMethod("BeginTransaction", $TO)
+        return $Return
+    }
 
-}
+    End
+    {
+
+    }
 
 }
 
 function ConvertFrom-Base64
 {
+    [Cmdletbinding(DefaultParameterSetName="OutputBytes")]
     param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0, ParameterSetName = "OutputBytes")]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0, ParameterSetName = "OutputText")]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0, ParameterSetName = "OutputHex")]
         [string]$Base64,
 
-        [switch]$AsText
+        [Parameter(ParameterSetName = "OutputText")]
+        [switch]$AsText,
+        [Parameter(ParameterSetName = "OutputHex")]
+        [switch]$AsHex
     )
     $mod4 = $Base64.Length % 4
 
@@ -734,6 +825,10 @@ function ConvertFrom-Base64
     }
 
     $bytes = [Convert]::FromBase64String($Base64)
+    if ($AsHex)
+    {
+        return -join $bytes.ForEach( {"{0:X2}" -f $_})
+    }
     if ($AsText)
     {
         return [Text.UTF8Encoding]::new().GetString($bytes)
@@ -745,14 +840,22 @@ function ConvertFrom-Base64
 function Invoke-GdsGqlQuery
 {
 Param(
-    [string]$Project,
+    [string]$ProjectId,
     [string]$QueryString,
     [bool]$AllowLiterals,
     [hashtable]$NamedBindings,
-    [List[Object]]$PositionalBindings
+    [List[Object]]$PositionalBindings,
+    [string]$OAuthToken
 )
 Begin{
-    $UriList = [DSUri]::new($Project)
+        if ($OAuthToken)
+        {
+            $UriList = [DSUri]::new($ProjectId, $OAuthToken);
+        }
+        else
+        {
+            $UriList = [DSUri]::new($ProjectId);
+        }
 }
 
 Process{
@@ -773,16 +876,27 @@ function Get-GdsEntity #Lookup
     Param(
         [string]
         $ProjectId,
+        
         [string]
         $TransactionId,
 
         [Key[]]
-        $Key
+        $Key,
+
+        [string]
+        $OAuthToken
     )
 
     Begin
     {
-        $DsUri = [DSUri]::new($ProjectId)
+        if ($OAuthToken)
+        {
+            $DsUri = [DSUri]::new($ProjectId, $OAuthToken);
+        }
+        else
+        {
+            $DsUri = [DSUri]::new($ProjectId);
+        }
     }
     End
     {
@@ -796,7 +910,7 @@ function Get-GdsEntity #Lookup
     }
 }
 
-function New-GdsCommit
+function New-GdsCommitBody
 {
     param(
         [Parameter(Mandatory = $true, Position = 0)]
@@ -820,8 +934,6 @@ function New-GdsCommit
         {
             $Body.AddMutation($m)
         }
-
-        
     }
     End
     {
@@ -829,16 +941,40 @@ function New-GdsCommit
     }
 }
 
+function New-RollbackBody
+{
+    param(
+        # The Base64 encoded string returned when beginning the transaction
+        # If validation fails, throws System.Management.Automation.ParameterBindingException
+        [ValidateScript( {
+                [System.Convert]::FromBase64String($_) -gt 0
+            })]
+        [string]
+        $TransactionId
+    )
+
+    return [RollbackBody]::new($TransactionId)
+
+}
+
 function Invoke-GdsCommit
 {
     Param(
-        [string]$Project,
-        [CommitBody]$CommitBody
+        [string]$ProjectId,
+        [CommitBody]$CommitBody,
+        [string]$OauthToken
     )
 
     Begin
     {
-        $UriList = [DSUri]::new($Project)
+        if ($OAuthToken)
+        {
+            $UriList = [DSUri]::new($ProjectId, $OAuthToken);
+        }
+        else
+        {
+            $UriList = [DSUri]::new($ProjectId);
+        }
     }
 
     Process
@@ -851,6 +987,3 @@ function Invoke-GdsCommit
     }
 
 }
-
-
-
